@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: dashboard-bi-v2
+    env: docker
+    dockerfilePath: Dockerfile
+    branch: main
+    plan: starter
+    region: oregon
+    buildCommand: "pnpm install --frozen-lockfile && pnpm build"
+    startCommand: "npm start"
+    envVars:
+      - key: PORT
+        value: "3001"
+    disk:
+      name: dashboard-data
+      sizeGb: 1
+    autoDeploy: true
