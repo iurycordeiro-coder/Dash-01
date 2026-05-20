@@ -3,7 +3,8 @@ FROM node:20-bullseye-slim AS builder
 WORKDIR /app
 
 # Install dependencies and build application
-COPY package.json pnpm-lock.yaml patches/ .
+COPY package.json pnpm-lock.yaml .
+COPY patches patches
 RUN corepack enable && corepack prepare pnpm@10.4.1 --activate && pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm build
@@ -11,7 +12,8 @@ RUN pnpm build
 FROM node:20-bullseye-slim AS runner
 WORKDIR /app
 
-COPY package.json pnpm-lock.yaml patches/ .
+COPY package.json pnpm-lock.yaml .
+COPY patches patches
 RUN corepack enable && corepack prepare pnpm@10.4.1 --activate && pnpm install --prod --frozen-lockfile
 
 COPY --from=builder /app/dist ./dist
