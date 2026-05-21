@@ -21,7 +21,7 @@ export function useDashboardSync(onDataUpdate: (data: any) => void) {
   const wsReconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const wsReconnectAttemptsRef = useRef<number>(0);
 
-  // Conectar ao WebSocket com backoff exponencial
+  // Conectar ao WebSocket com backoff exponencial e múltiplos candidatos
   const connectWebSocket = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       return;
@@ -29,71 +29,135 @@ export function useDashboardSync(onDataUpdate: (data: any) => void) {
 
     try {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const hostPort = `${window.location.hostname}${window.location.port ? `:${window.location.port}` : ""}`;
+      const candidates: string[] = [];
+
+      // If user provided explicit WS URL via env, try it first
       const customWsUrl = import.meta.env.VITE_WS_URL;
-      const wsUrl =
-        customWsUrl ||
-        `${protocol}//${window.location.hostname}${window.location.port === "3000" ? ":3001" : window.location.port ? `:${window.location.port}` : ""}`;
+      if (customWsUrl) candidates.push(customWsUrl);
 
-      console.log("🔄 Attempting WebSocket connection to:", wsUrl);
-      const ws = new WebSocket(wsUrl);
+      // Same-origin root (wss://host or ws://host)
+      candidates.push(`${protocol}//${hostPort}`);
 
-      ws.onopen = () => {
-        console.log("✅ WebSocket connected to", wsUrl);
-        wsReconnectAttemptsRef.current = 0; // Reset attempts on success
-        setSyncState((prev) => ({
-          ...prev,
-          wsConnected: true,
-        }));
-      };
+      // Same-origin with /ws path (some reverse proxies expect a path)
+      candidates.push(`${protocol}//${hostPort}/ws`);
 
-      ws.onmessage = (event) => {
-        try {
-          const message = JSON.parse(event.data);
-
-          if (message.type === "data-update") {
-            console.log("📡 Data update received from WebSocket:", message.payload);
-            lastUpdateTimeRef.current = message.timestamp;
-            onDataUpdate(message.payload);
-            
-            setSyncState((prev) => ({
-              ...prev,
-              isConnected: true,
-              lastUpdate: new Date(message.timestamp),
-            }));
-          }
-        } catch (error) {
-          console.error("Error parsing WebSocket message:", error);
+      let attempted = 0;
+      const tryNext = () => {
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
+        if (attempted >= candidates.length) {
+          // Kick off a retry with exponential backoff
+          const delay = Math.min(3000 * Math.pow(2, wsReconnectAttemptsRef.current), 60000);
+          wsReconnectAttemptsRef.current += 1;
+          wsReconnectTimeoutRef.current = setTimeout(() => tryNext(), delay);
+          return;
         }
+
+        const wsUrl = candidates[attempted++];
+        console.log("🔄 Attempting WebSocket connection to:", wsUrl);
+        const ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          console.log("✅ WebSocket connected to", wsUrl);
+          wsReconnectAttemptsRef.current = 0; // Reset attempts on success
+          setSyncState((prev) => ({
+            ...prev,
+            wsConnected: true,
+          }));
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const message = JSON.parse(event.data);
+
+            if (message.type === "data-update") {
+              console.log("📡 Data update received from WebSocket:", message.payload);
+              lastUpdateTimeRef.current = message.timestamp;
+              onDataUpdate(message.payload);
+              
+              setSyncState((prev) => ({
+                ...prev,
+                isConnected: true,
+                lastUpdate: new Date(message.timestamp),
+              }));
+            }
+          } catch (error) {
+            console.error("Error parsing WebSocket message:", error);
+          }
+        };
+
+        ws.onclose = () => {
+          console.log("❌ WebSocket closed for", wsUrl);
+          // Try next candidate immediately
+          if (wsRef.current === ws) wsRef.current = null;
+          setSyncState((prev) => ({
+            ...prev,
+            wsConnected: false,
+          }));
+          tryNext();
+        };
+
+        ws.onerror = (error) => {
+          console.warn("⚠️ WebSocket error for", wsUrl, error?.toString?.() || error);
+          if (wsRef.current === ws) wsRef.current = null;
+          setSyncState((prev) => ({
+            ...prev,
+            wsConnected: false,
+          }));
+          // Try the next candidate right away
+          tryNext();
+        };
+
+        wsRef.current = ws;
       };
 
-      ws.onclose = () => {
-        console.log("❌ WebSocket disconnected. Polling fallback active.");
-        setSyncState((prev) => ({
-          ...prev,
-          wsConnected: false,
-        }));
-        
-        // Exponential backoff: 3s, 6s, 12s, 24s, max 60s
-        const delay = Math.min(3000 * Math.pow(2, wsReconnectAttemptsRef.current), 60000);
-        wsReconnectAttemptsRef.current += 1;
-        
-        console.log(`📡 WebSocket will retry in ${delay}ms (attempt ${wsReconnectAttemptsRef.current})`);
-        wsReconnectTimeoutRef.current = setTimeout(() => {
-          connectWebSocket();
-        }, delay);
-      };
-
-      ws.onerror = (error) => {
-        console.warn("⚠️ WebSocket error (this is normal if server is not running):", error?.toString?.() || error);
-        setSyncState((prev) => ({
-          ...prev,
-          wsConnected: false,
-        }));
-      };
-
-      wsRef.current = ws;
+      // start trying candidates
+      tryNext();
     } catch (error) {
       console.error("Error creating WebSocket:", error);
+    }
+  }, [onDataUpdate]);
+
+  const fetchDashboardData = useCallback(async () => {
+    try {
+      // Add cache-busting parameter to ensure fresh data from server
+      const response = await fetch(`/api/dashboard/data?t=${Date.now()}`);
+
+      if (!response.ok) {
+        throw new Error("Failed to fetch dashboard data");
+      }
+
+      const result = await response.json();
+
+      console.log("📊 fetchDashboardData response:", {
+        hasData: !!result.data,
+        itemsCount: Array.isArray(result.data?.raw_data) ? result.data.raw_data.length : 0,
+        updatedAt: result.updatedAt,
+      });
+
+      if (result.data) {
+        // Always update on fetch (don't skip even if timestamp looks same)
+        // This ensures UI updates after import
+        console.log("✅ Updating data with fresh fetch", {
+          hasRawData: !!result.data.raw_data,
+          itemsCount: result.data.raw_data?.length,
+        });
+        lastUpdateTimeRef.current = result.updatedAt;
+        // Pass the data object directly (contains raw_data, kpis, etc.)
+        onDataUpdate(result.data);
+
+        setSyncState((prev) => ({
+          ...prev,
+          isConnected: true,
+          lastUpdate: result.updatedAt ? new Date(result.updatedAt) : new Date(),
+        }));
+      }
+    } catch (error) {
+      console.error("Error fetching dashboard data:", error);
+      setSyncState((prev) => ({
+        ...prev,
+        isConnected: false,
+      }));
     }
   }, [onDataUpdate]);
 
@@ -153,49 +217,6 @@ export function useDashboardSync(onDataUpdate: (data: any) => void) {
       }));
     }
   }, [fetchDashboardData]);
-
-  const fetchDashboardData = useCallback(async () => {
-    try {
-      // Add cache-busting parameter to ensure fresh data from server
-      const response = await fetch(`/api/dashboard/data?t=${Date.now()}`);
-
-      if (!response.ok) {
-        throw new Error("Failed to fetch dashboard data");
-      }
-
-      const result = await response.json();
-
-      console.log("📊 fetchDashboardData response:", {
-        hasData: !!result.data,
-        itemsCount: Array.isArray(result.data?.raw_data) ? result.data.raw_data.length : 0,
-        updatedAt: result.updatedAt,
-      });
-
-      if (result.data) {
-        // Always update on fetch (don't skip even if timestamp looks same)
-        // This ensures UI updates after import
-        console.log("✅ Updating data with fresh fetch", {
-          hasRawData: !!result.data.raw_data,
-          itemsCount: result.data.raw_data?.length,
-        });
-        lastUpdateTimeRef.current = result.updatedAt;
-        // Pass the data object directly (contains raw_data, kpis, etc.)
-        onDataUpdate(result.data);
-
-        setSyncState((prev) => ({
-          ...prev,
-          isConnected: true,
-          lastUpdate: result.updatedAt ? new Date(result.updatedAt) : new Date(),
-        }));
-      }
-    } catch (error) {
-      console.error("Error fetching dashboard data:", error);
-      setSyncState((prev) => ({
-        ...prev,
-        isConnected: false,
-      }));
-    }
-  }, [onDataUpdate]);
 
   // Conectar ao WebSocket e fazer polling
   useEffect(() => {

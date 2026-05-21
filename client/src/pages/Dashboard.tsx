@@ -1112,6 +1112,14 @@ export function Dashboard() {
               // Preencher campos faltantes usando a base antiga como referência
               const oldRawData = data?.raw_data || [];
               const enrichedRows = normalizedRows.map((row: any) => fillMissingFields(row, oldRawData));
+
+              const meses = Array.from(
+                new Set(
+                  enrichedRows
+                    .map((row: any) => String(row["Mês"] || "Sem mês"))
+                    .filter((mes) => mes && mes.trim())
+                )
+              ).sort((a, b) => a.localeCompare(b));
               
               // Processar dados importados para calcular agregações (usando dados enriquecidos)
               const processedData: DashboardData = {
@@ -1131,7 +1139,7 @@ export function Dashboard() {
                 prestacao_por_pessoa: [],
                 comparacao_periodos: [],
                 raw_data: enrichedRows,
-                meses: data?.meses || [],
+                meses,
               };
               
               if (enrichedRows.length > 0) {
