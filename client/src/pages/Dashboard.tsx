@@ -61,6 +61,9 @@ export function Dashboard() {
   const [topCategorias, setTopCategorias] = useState<number | "todas">(10);
   const itemsPerPage = 10;
 
+  const DIRECTOR_NAMES = ["Gislane Gomes", "Alessandro Almeida De Souza"];
+  const isDirector = (row: DashboardRow) => DIRECTOR_NAMES.includes(String(row?.Nome || "").trim());
+
   // Sincronização em tempo real
   const { isConnected, lastUpdate, saveDashboardData, fetchDashboardData } = useDashboardSync(
     (newData) => {
@@ -70,29 +73,49 @@ export function Dashboard() {
   );
 
   useEffect(() => {
+    const populateFilters = (jsonData: any) => {
+      if (!jsonData?.raw_data?.length) return;
+
+      const unidadesSet = new Set<string>();
+      const regioesSet = new Set<string>();
+      const nomesSet = new Set<string>();
+
+      const rows = jsonData.raw_data.filter((row: any) => !isDirector(row));
+      rows.forEach((row: any) => {
+        if (row.Unidade) unidadesSet.add(row.Unidade);
+        if (row.Região) regioesSet.add(row.Região);
+        if (row.Nome) nomesSet.add(row.Nome);
+      });
+
+      setUnidades(["Todas", ...Array.from(unidadesSet).filter((u) => u && u.trim()).sort()]);
+      setRegioes(["Todas", ...Array.from(regioesSet).filter((r) => r && r.trim()).sort()]);
+      setNomes(["Todos", ...Array.from(nomesSet).filter((n) => n && n.trim()).sort()]);
+    };
+
     const loadData = async () => {
+      try {
+        const response = await fetch("/api/dashboard/data");
+        if (response.ok) {
+          const result = await response.json();
+          const apiData = result?.data ?? null;
+
+          if (apiData) {
+            setData(apiData);
+            populateFilters(apiData);
+            return;
+          }
+        }
+      } catch (error) {
+        console.error("Erro ao carregar dados da API:", error);
+      }
+
       try {
         const response = await fetch("/dashboard_data.json");
         const jsonData = await response.json();
         setData(jsonData);
-
-        if (jsonData.raw_data && jsonData.raw_data.length > 0) {
-          const unidadesSet = new Set<string>();
-          const regioesSet = new Set<string>();
-          const nomesSet = new Set<string>();
-
-          jsonData.raw_data.forEach((row: any) => {
-            if (row.Unidade) unidadesSet.add(row.Unidade);
-            if (row.Região) regioesSet.add(row.Região);
-            if (row.Nome) nomesSet.add(row.Nome);
-          });
-
-          setUnidades(["Todas", ...Array.from(unidadesSet).filter(u => u && u.trim()).sort()]);
-          setRegioes(["Todas", ...Array.from(regioesSet).filter(r => r && r.trim()).sort()]);
-          setNomes(["Todos", ...Array.from(nomesSet).filter(n => n && n.trim()).sort()]);
-        }
+        populateFilters(jsonData);
       } catch (error) {
-        console.error("Erro ao carregar dados:", error);
+        console.error("Erro ao carregar dados de fallback:", error);
       }
     };
 
@@ -102,7 +125,9 @@ export function Dashboard() {
   const processedData = useMemo(() => {
     if (!data || !data.raw_data) return null;
 
-    const filtered = data.raw_data.filter((row: DashboardRow) => {
+    const generalRows = data.raw_data.filter((row: DashboardRow) => !isDirector(row));
+
+    const filtered = generalRows.filter((row: DashboardRow) => {
       if (singleSelectedName && singleSelectedName !== "Todos") {
         return row.Nome === singleSelectedName;
       }
@@ -252,6 +277,9 @@ export function Dashboard() {
       const comparison = aVal > bVal ? 1 : aVal < bVal ? -1 : 0;
       return sortOrder === "asc" ? comparison : -comparison;
     });
+
+  const directorRows = data?.raw_data?.filter((row: DashboardRow) => isDirector(row)) || [];
+  const directorTotalGastos = directorRows.reduce((sum: number, row: DashboardRow) => sum + (Number(row["Valor lançamento"]) || 0), 0);
 
   const allColumns = filteredData.raw_data.length > 0 ? Object.keys(filteredData.raw_data[0]) : [];
 
@@ -560,7 +588,7 @@ export function Dashboard() {
                 <CardContent>
                   <div className="space-y-3 max-h-96 overflow-y-auto">
                     {filteredData.gastos_nome
-                      .filter((pessoa: any) => pessoa.Nome !== "Gislane Gomes" && pessoa.Nome !== "Alessandro Almeida De Souza")
+                      .filter((pessoa: any) => !DIRECTOR_NAMES.includes(pessoa.Nome))
                       .slice(0, 10)
                       .map((pessoa: any, idx: number) => (
                       <div 
@@ -777,6 +805,7 @@ export function Dashboard() {
                     </TableHeader>
                     <TableBody>
                       {filteredData.prestacao_por_pessoa
+                        .filter((pessoa: any) => !DIRECTOR_NAMES.includes(pessoa.Nome))
                         .sort((a, b) => {
                           if (prestacaoSortOrder === "desc") {
                             return b["Não Prestado Valor"] - a["Não Prestado Valor"];
@@ -845,7 +874,7 @@ export function Dashboard() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        {allColumns.slice(0, 8).map((col) => (
+                        {allColumns.map((col) => (
                           <TableHead key={col}>{col}</TableHead>
                         ))}
                       </TableRow>
@@ -853,7 +882,7 @@ export function Dashboard() {
                     <TableBody>
                       {paginatedData.map((row, idx) => (
                         <TableRow key={idx}>
-                          {allColumns.slice(0, 8).map((col) => (
+                          {allColumns.map((col) => (
                             <TableCell key={col}>
                               {col === "Valor lançamento" ? formatarMoeda(row[col]) : String(row[col] || "")}
                             </TableCell>
@@ -895,22 +924,34 @@ export function Dashboard() {
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
-                  {filteredData.gastos_nome
-                    .filter((pessoa: any) => pessoa.Nome === "Gislane Gomes" || pessoa.Nome === "Alessandro Almeida De Souza")
-                    .map((pessoa: any, idx: number) => (
-                      <div key={idx} className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-purple-500 text-white flex items-center justify-center text-sm font-bold">
-                            {idx + 1}
+                  {directorRows.length > 0 ?
+                    (Array.from(
+                      directorRows
+                        .reduce((map: Map<string, number>, row: DashboardRow) => {
+                          const nome = String(row.Nome || "Sem nome");
+                          map.set(nome, (map.get(nome) || 0) + (Number(row["Valor lançamento"]) || 0));
+                          return map;
+                        }, new Map<string, number>())
+                        .entries()
+                    ) as [string, number][])
+                      .map(([nome, valor]) => ({ Nome: nome, "Valor lançamento": valor }))
+                      .sort((a, b) => b["Valor lançamento"] - a["Valor lançamento"])
+                      .map((pessoa: any, idx: number) => (
+                        <div key={idx} className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-full bg-purple-500 text-white flex items-center justify-center text-sm font-bold">
+                              {idx + 1}
+                            </div>
+                            <div>
+                              <p className="font-medium text-sm">{pessoa.Nome}</p>
+                              <p className="text-xs text-slate-500">{formatarMoeda(pessoa["Valor lançamento"])}</p>
+                            </div>
                           </div>
-                          <div>
-                            <p className="font-medium text-sm">{pessoa.Nome}</p>
-                            <p className="text-xs text-slate-500">{formatarMoeda(pessoa["Valor lançamento"])}</p>
-                          </div>
+                          <span className="text-sm font-medium">{formatarPercentual((pessoa["Valor lançamento"] / (directorTotalGastos || 1)) * 100)}</span>
                         </div>
-                        <span className="text-sm font-medium">{formatarPercentual((pessoa["Valor lançamento"] / filteredData.kpis.total_gastos) * 100)}</span>
-                      </div>
-                    ))}
+                      ))
+                    : <p className="text-sm text-slate-500">Nenhum registro de diretoria disponível.</p>
+                  }
                 </div>
               </CardContent>
             </Card>
@@ -934,17 +975,50 @@ export function Dashboard() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filteredData.prestacao_por_pessoa
-                        .filter((p: any) => p.Nome === "Gislane Gomes" || p.Nome === "Alessandro Almeida De Souza")
-                        .map((pessoa: any, idx: number) => (
-                          <TableRow key={idx}>
-                            <TableCell className="font-medium">{pessoa.Nome}</TableCell>
-                            <TableCell className="text-right">{formatarMoeda(pessoa["Total Valor"])}</TableCell>
-                            <TableCell className="text-right text-green-600">{formatarMoeda(pessoa["Prestado Valor"])}</TableCell>
-                            <TableCell className="text-right text-red-600">{formatarMoeda(pessoa["Não Prestado Valor"])}</TableCell>
-                            <TableCell className="text-right font-medium">{formatarPercentual(pessoa["Prestado %"])}</TableCell>
+                      {directorRows.length > 0 ?
+                        Array.from(
+                          directorRows
+                            .reduce((map: Map<string, any>, row: DashboardRow) => {
+                              const nome = String(row.Nome || "Sem nome");
+                              if (!map.has(nome)) {
+                                map.set(nome, {
+                                  Nome: nome,
+                                  "Total Valor": 0,
+                                  "Prestado Valor": 0,
+                                  "Não Prestado Valor": 0,
+                                });
+                              }
+                              const pessoa = map.get(nome)!;
+                              const valor = Number(row["Valor lançamento"]) || 0;
+                              pessoa["Total Valor"] += valor;
+                              const status = String(row["Status prestação de contas"] || "").toLowerCase().trim();
+                              if (status !== "pendente" && status !== "reprovado" && status !== "") {
+                                pessoa["Prestado Valor"] += valor;
+                              } else {
+                                pessoa["Não Prestado Valor"] += valor;
+                              }
+                              return map;
+                            }, new Map<string, any>())
+                            .values()
+                        )
+                          .map((pessoa: any) => ({
+                            ...pessoa,
+                            "Prestado %": pessoa["Total Valor"] > 0 ? (pessoa["Prestado Valor"] / pessoa["Total Valor"] * 100) : 0,
+                          }))
+                          .sort((a: any, b: any) => b["Total Valor"] - a["Total Valor"])
+                          .map((pessoa: any, idx: number) => (
+                            <TableRow key={idx}>
+                              <TableCell className="font-medium">{pessoa.Nome}</TableCell>
+                              <TableCell className="text-right">{formatarMoeda(pessoa["Total Valor"])}</TableCell>
+                              <TableCell className="text-right text-green-600">{formatarMoeda(pessoa["Prestado Valor"])}</TableCell>
+                              <TableCell className="text-right text-red-600">{formatarMoeda(pessoa["Não Prestado Valor"])}</TableCell>
+                              <TableCell className="text-right font-medium">{formatarPercentual(pessoa["Prestado %"])}</TableCell>
+                            </TableRow>
+                          ))
+                        : <TableRow>
+                            <TableCell colSpan={5} className="text-center text-sm text-slate-500">Nenhum registro de diretoria disponível.</TableCell>
                           </TableRow>
-                        ))}
+                      }
                     </TableBody>
                   </Table>
                 </div>
@@ -1216,10 +1290,13 @@ export function Dashboard() {
               setSelectedNomes(["Todos"]);
               
               // Atualizar dados - SUBSTITUIR completamente (não somar)
-              setData({
+              const newData = {
                 ...data,
                 raw_data: enrichedRows,
-              });
+                meses: data?.meses || [],
+              };
+
+              setData(newData);
               
               // Resetar filtro de pessoa selecionada
               setSingleSelectedName(null);
@@ -1231,10 +1308,7 @@ export function Dashboard() {
               
               // Sincronizar dados com o servidor
               try {
-                await saveDashboardData({
-                  ...data,
-                  raw_data: enrichedRows,
-                });
+                await saveDashboardData(newData);
                 toast.success("✅ Dados sincronizados com sucesso");
               } catch (error) {
                 console.error("Erro ao sincronizar:", error);
