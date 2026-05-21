@@ -67,6 +67,10 @@ export function Dashboard() {
   // Sincronização em tempo real
   const { isConnected, lastUpdate, saveDashboardData, fetchDashboardData } = useDashboardSync(
     (newData) => {
+      console.log("🔄 Dashboard received data update callback", {
+        hasData: !!newData,
+        itemsCount: Array.isArray(newData?.raw_data) ? newData.raw_data.length : 0,
+      });
       setData(newData);
       toast.success("✅ Dados atualizados em tempo real");
     }
@@ -1289,29 +1293,30 @@ export function Dashboard() {
               setSelectedMes("Todos");
               setSelectedNomes(["Todos"]);
               
-              // Atualizar dados - SUBSTITUIR completamente (não somar)
-              const newData = {
-                ...data,
-                raw_data: enrichedRows,
-                meses: data?.meses || [],
-              };
-
-              setData(newData);
-              
               // Resetar filtro de pessoa selecionada
               setSingleSelectedName(null);
               
               // Mostrar mensagem de sucesso
               toast.success(`Base importada com sucesso! ${enrichedRows.length} registros carregados.\nA base anterior foi usada apenas para preencher campos faltantes.`);
               
+              // Atualizar estado local imediatamente com os dados completos processados
+              setData(processedData);
               setFilteredData(processedData);
               
-              // Sincronizar dados com o servidor
+              // Sincronizar dados completos com o servidor
+              console.log("💾 Saving complete processed data to server:", {
+                hasRawData: !!processedData.raw_data,
+                itemsCount: processedData.raw_data?.length,
+                hasKpis: !!processedData.kpis,
+              });
+              
               try {
-                await saveDashboardData(newData);
+                // IMPORTANTE: Salvar o processedData COMPLETO, não apenas newData
+                await saveDashboardData(processedData);
+                console.log("✅ Complete data saved to server successfully");
                 toast.success("✅ Dados sincronizados com sucesso");
               } catch (error) {
-                console.error("Erro ao sincronizar:", error);
+                console.error("❌ Erro ao sincronizar:", error);
                 toast.error("❌ Erro ao sincronizar dados");
               }
             }} />

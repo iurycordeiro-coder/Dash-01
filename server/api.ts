@@ -12,12 +12,18 @@ router.post("/api/dashboard/save", async (req, res) => {
       return res.status(400).json({ error: "Data is required" });
     }
 
+    console.log("POST /api/dashboard/save - received dashboard save request", {
+      userId: userId || null,
+      items: Array.isArray(data?.raw_data) ? data.raw_data.length : undefined,
+    });
+
     await saveDashboardData(data, userId);
 
     // Notificar todos os clientes conectados sobre a atualização
     const broadcastDataUpdate = (req as any).broadcastDataUpdate;
     if (broadcastDataUpdate) {
       broadcastDataUpdate(data);
+      console.log("POST /api/dashboard/save - broadcastDataUpdate called");
     }
 
     res.json({
@@ -34,6 +40,12 @@ router.post("/api/dashboard/save", async (req, res) => {
 router.get("/api/dashboard/data", async (req, res) => {
   try {
     const result = await getDashboardData();
+
+    console.log("GET /api/dashboard/data - returning data", {
+      hasData: !!result,
+      itemsCount: Array.isArray(result?.data?.raw_data) ? result.data.raw_data.length : 0,
+      updatedAt: result?.updatedAt,
+    });
 
     if (!result) {
       return res.json({
